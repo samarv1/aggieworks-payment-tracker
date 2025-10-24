@@ -1,13 +1,15 @@
 # AggieWorks Member Payment Tracker
 
-Web app to scrape incoming Venmo payments from Gmail and export to CSV.
+Web app to scrape incoming Venmo and Zelle payments from Gmail and export to CSV.
 
 ## Features
 
-- 🔍 Scrapes incoming Venmo payments from Gmail
+- 🔍 Scrapes incoming payments from **Venmo** and/or **Zelle**
+- ✅ Multi-select payment sources (Venmo, Zelle, or both)
 - 🏷️ Filter by categories: Retreat, Dues, or custom keywords
 - 📅 Search from specific date/time
 - 📊 Exports to CSV (no duplicates on repeated runs)
+- 🔐 Secure login page with persistent sessions
 - 🎨 Modern UI built with Next.js + shadcn/ui
 
 ## Prerequisites
@@ -63,27 +65,34 @@ cd backend
 source .venv/bin/activate
 python run.py
 ```
-First run will open browser for Gmail OAuth (click Allow).
+Backend runs on [http://localhost:8000]
 
 **Terminal 2 - Frontend:**
 ```bash
 cd frontend
 pnpm dev
 ```
+Frontend runs on [http://localhost:3000]
 
 Open [http://localhost:3000](http://localhost:3000)
 
 ## Usage
 
-1. **Enter Gmail credentials** (for display only - OAuth handles auth)
-2. **Select start date/time** - scraper searches from this point forward
+1. **Login Page** - Enter your Gmail credentials (saved in browser for future sessions)
+2. **Select payment sources:**
+   - ✅ **Venmo** - scrapes from `venmo@venmo.com`
+   - ✅ **Zelle** - scrapes from Wells Fargo (`alerts@notify.wellsfargo.com`)
+   - ✅ Select one, the other, or both
 3. **Choose category:**
-   - **Retreat** - searches for "retreat" keywords
-   - **Dues** - searches for "dues", "membership" keywords
+   - **Retreat** - searches for "retreat", "fall retreat", "spring retreat" keywords
+   - **Dues** - searches for "dues", "membership dues", "quarter dues" keywords
    - **Other** - enter custom keywords (comma-separated)
-4. **Click "Run Scraper"**
+4. **Select start date/time** - scraper searches from this point forward
+5. **Click "Run Scraper"**
 
 Results are saved to `backend/venmo_payments.csv`
+
+**Note:** CSV file starts fresh when you change payment sources (Venmo → Zelle) or date parameters.
 
 ## CSV Output
 
@@ -99,11 +108,27 @@ Results are saved to `backend/venmo_payments.csv`
 - Only tracks **incoming** payments (money you received)
 - No duplicates (detected by Person + Date + Amount)
 - Sorted by date (newest first)
-- Updates same file on repeated runs
+- Updates same file on repeated runs with same parameters
+- Includes a **TOTAL** row at the bottom summing all amounts
+- Starts fresh CSV when payment source or date changes
 
-## Notes
+## Payment Sources
 
-- `credentials.json` and `token.pickle` are excluded from git (.gitignore)
+### Venmo
+- Email: `venmo@venmo.com`
+- Subject: `[Name] paid you $X.XX`
+- Extracts: Person, amount, date, payment note
+
+### Zelle (Wells Fargo)
+- Email: `alerts@notify.wellsfargo.com`
+- Subject: `You received money with Zelle®`
+- Body format: `[NAME] sent you $X.XX`
+- Extracts: Person, amount, date, memo
+
+## Security Notes
+
+- `credentials.json` and `token_*.pickle` are excluded from git (.gitignore)
 - Never commit these files - they contain authentication credentials
 - CSV file is also git-ignored
-- Scraper only searches emails from `venmo@venmo.com`
+- Credentials stored in browser localStorage (clear on logout)
+- Each Gmail account gets its own token file for multi-account support
