@@ -26,6 +26,7 @@ class ScraperConfig(BaseModel):
     startTime: str
     category: str
     customKeywords: Optional[str] = None
+    source: str = "venmo"  # Default to 'venmo', can be 'venmo', 'zelle', or 'both'
 
 
 # Response model
@@ -60,6 +61,7 @@ async def run_scraper(config: ScraperConfig):
         print(f"  Start Date: {config.startDate}")
         print(f"  Start Time: {config.startTime}")
         print(f"  Category: {config.category}")
+        print(f"  Source: {config.source}")
         if config.customKeywords:
             print(f"  Custom Keywords: {config.customKeywords}")
         
@@ -75,29 +77,60 @@ async def run_scraper(config: ScraperConfig):
                 detail="Invalid date/time format"
             )
         
-        # Call scraper function
+        # Call scraper function(s) based on source
         print("Starting email scrape...")
-        payments = scrape_emails(
-            email=config.email,
-            password=config.password,
-            start_datetime=start_datetime,
-            category=config.category,
-            keywords=config.customKeywords
-        )
+        all_payments = []
         
-        print(f"Found {len(payments)} new payment(s)")
+        if config.source == "both":
+            # Scrape both Venmo and Zelle
+            venmo_payments = scrape_emails(
+                email=config.email,
+                password=config.password,
+                start_datetime=start_datetime,
+                category=config.category,
+                keywords=config.customKeywords,
+                source='venmo'
+            )
+            print(f"Found {len(venmo_payments)} Venmo payment(s)")
+            
+            zelle_payments = scrape_emails(
+                email=config.email,
+                password=config.password,
+                start_datetime=start_datetime,
+                category=config.category,
+                keywords=config.customKeywords,
+                source='zelle'
+            )
+            print(f"Found {len(zelle_payments)} Zelle payment(s)")
+            
+            all_payments = venmo_payments + zelle_payments
+        else:
+            # Scrape single source
+            all_payments = scrape_emails(
+                email=config.email,
+                password=config.password,
+                start_datetime=start_datetime,
+                category=config.category,
+                keywords=config.customKeywords,
+                source=config.source
+            )
+        
+        print(f"Found {len(all_payments)} total payment(s)")
         
         # Save to CSV
-        csv_path = save_payments_to_csv(payments, config.category)
+        csv_path, total_amount = save_payments_to_csv(all_payments, config.category, start_datetime_str, config.source)
         total_in_csv = get_payment_count()
+        
+        source_label = "Venmo & Zelle" if config.source == "both" else config.source.capitalize()
         
         return ScraperResponse(
             status="success",
-            message=f"Successfully scraped {len(payments)} incoming Venmo payment(s). Total in CSV: {total_in_csv}",
+            message=f"Successfully scraped {len(all_payments)} incoming {source_label} payment(s). Total in CSV: {total_in_csv}",
             data={
-                "new_payments": payments,
-                "new_count": len(payments),
+                "new_payments": all_payments,
+                "new_count": len(all_payments),
                 "total_in_csv": total_in_csv,
+                "total_amount": total_amount,
                 "csv_path": csv_path,
                 "category": config.category,
                 "start_datetime": start_datetime_str
