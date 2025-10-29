@@ -12,10 +12,10 @@ __pycache__/
 
 # Gmail OAuth2 Credentials - NEVER COMMIT THESE
 credentials.json
-token*.pickle
+tokens/
 
 # CSV Data Files
-venmo_payments.csv
+member_to_DoF_payments.csv
 csv_metadata.txt
 
 # Environment variables

@@ -48,10 +48,14 @@ class VenmoEmailScraper:
         """Authenticate with Gmail API using OAuth2"""
         creds = None
         
+        # Create tokens directory if it doesn't exist
+        tokens_dir = 'tokens'
+        os.makedirs(tokens_dir, exist_ok=True)
+        
         # Create email-specific token filename
         # Replace @ and . to make it filename-safe
         safe_email = self.email.replace('@', '_at_').replace('.', '_')
-        token_file = f'token_{safe_email}.pickle'
+        token_file = os.path.join(tokens_dir, f'token_{safe_email}.pickle')
         
         # Token file stores user's access and refresh tokens
         if os.path.exists(token_file):

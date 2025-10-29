@@ -7,7 +7,7 @@ from typing import List, Dict
 from datetime import datetime
 
 
-CSV_FILENAME = "venmo_payments.csv"
+CSV_FILENAME = "member_to_DoF_payments.csv"
 CSV_HEADERS = [
     'Person',
     'Date',
