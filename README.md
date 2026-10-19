@@ -95,6 +95,7 @@ Open [localhost:3000](http://localhost:3000), enter your Gmail address, choose y
 With the backend virtual environment activated, run from the repository root:
 
 ```bash
+pip install -r backend/requirements-dev.txt
 python -m unittest discover -s backend/tests
 ```
 
@@ -104,6 +105,7 @@ For frontend checks:
 
 ```bash
 cd frontend
+pnpm test
 pnpm lint
 pnpm exec tsc --noEmit
 ```

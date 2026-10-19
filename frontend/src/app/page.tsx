@@ -13,6 +13,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Checkbox } from "@/components/ui/checkbox";
 import { CalendarIcon, Loader2, LogOut } from "lucide-react";
 import { format } from "date-fns";
+import { runScraper } from "@/lib/scraper-client";
 
 export default function Home() {
   const router = useRouter();
@@ -36,6 +37,7 @@ export default function Home() {
       router.push("/login");
     } else {
       // OAuth authorization happens in the local backend.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Browser storage is unavailable during server rendering.
       setEmail(savedEmail);
       setIsCheckingAccount(false);
     }
@@ -54,12 +56,12 @@ export default function Home() {
 
   const handleRun = async () => {
     if (!email || !startDate) {
-      alert("Please fill in all required fields");
+      alert("Choose an account and a start date before running the scraper.");
       return;
     }
 
     if (!venmoSelected && !zelleSelected) {
-      alert("Please select at least one payment source");
+      alert("Select Venmo, Zelle, or both.");
       return;
     }
 
@@ -83,19 +85,7 @@ export default function Home() {
     };
 
     try {
-      const response = await fetch("http://localhost:8000/api/scraper/run", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(data),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const result = await response.json();
+      const result = await runScraper(data);
 
       let sourceLabel = "";
       if (venmoSelected && zelleSelected) {
@@ -112,7 +102,7 @@ export default function Home() {
       alert(message);
     } catch (error) {
       console.error("Error calling scraper:", error);
-      alert("Error running scraper. Make sure the backend is running.");
+      alert(error instanceof Error ? error.message : "The search could not finish. Check the backend terminal for details, then try again.");
     } finally {
       setIsLoading(false);
     }

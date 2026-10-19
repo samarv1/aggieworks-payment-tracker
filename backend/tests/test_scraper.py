@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 import unittest
 import sys
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scraper import VenmoEmailScraper
+from scraper import VenmoEmailScraper, scrape_emails
+from errors import ScraperError
 
 
 def message(subject, body, message_id='message-1'):
@@ -72,6 +73,108 @@ class PaymentParserTests(unittest.TestCase):
     def test_custom_keywords_are_case_insensitive(self):
         self.assertTrue(self.scraper._matches_category({'note': 'Fall fundraiser'}, 'other', 'donation, FUNDRAISER'))
         self.assertFalse(self.scraper._matches_category({'note': 'dinner'}, 'other', 'donation, fundraiser'))
+
+    def test_empty_keyword_tokens_do_not_match_everything(self):
+        for keywords in ['dues,', ', dues', 'dues,, retreat, ']:
+            with self.subTest(keywords=keywords):
+                self.assertFalse(self.scraper._matches_category({'note': 'dinner'}, 'other', keywords))
+                self.assertTrue(self.scraper._matches_category({'note': 'DUES'}, 'other', keywords))
+        for keywords in [None, '', ' ', ', ,']:
+            self.assertTrue(self.scraper._matches_category({'note': 'dinner'}, 'other', keywords))
+
+    def test_zelle_missing_memo_does_not_borrow_next_payment(self):
+        for memo in ['', 'Memo:\n']:
+            payments = self.scraper._extract_zelle_payments(message(
+                'Zelle payment received',
+                'TAYLOR EXAMPLE sent you $25.00\n' + memo
+                + 'JORDAN SAMPLE sent you $30.00\nMemo: dues',
+            ))
+            self.assertEqual([p['note'] for p in payments], ['', 'dues'])
+
+    def test_zelle_uppercase_memo_stays_out_of_next_name(self):
+        payments = self.scraper._extract_zelle_payments(message(
+            'Zelle payment received',
+            'TAYLOR EXAMPLE sent you $25.00\nMemo: RETREAT\n'
+            'JORDAN SAMPLE sent you $30.00\nMemo: DUES',
+        ))
+        self.assertEqual([p['person'] for p in payments], ['TAYLOR EXAMPLE', 'JORDAN SAMPLE'])
+        self.assertEqual([p['note'] for p in payments], ['RETREAT', 'DUES'])
+
+    def test_venmo_notes_preserve_punctuation_and_exclude_amount(self):
+        for note in ['Fall retreat', "Dinner, snacks & Sam’s ticket! 🎉", '']:
+            with self.subTest(note=note):
+                payment = self.scraper._extract_venmo_payment(message(
+                    'Taylor Example paid you $25.00',
+                    f'Taylor Example paid you $25.00 {note} See transaction',
+                ))
+                self.assertEqual(payment['note'], note)
+        self.assertEqual(self.scraper._extract_payment_note('Note: Snacks. Thanks!\nFooter'), 'Snacks. Thanks!')
+        self.assertIsNone(self.scraper._extract_payment_note('No payment note'))
+
+    def test_amounts_with_thousands_separators(self):
+        for amount in ['1,000.00', '12,345,678.90', '1000.00']:
+            expected = float(amount.replace(',', ''))
+            venmo = self.scraper._extract_venmo_payment(message(
+                f'Taylor Example paid you ${amount}', f'${amount} Retreat See transaction',
+            ))
+            zelle = self.scraper._extract_zelle_payments(message(
+                'Zelle payment received', f'TAYLOR EXAMPLE sent you ${amount}\nMemo: retreat',
+            ))
+            self.assertEqual(venmo['amount'], expected)
+            self.assertEqual(zelle[0]['amount'], expected)
+
+    def test_malformed_amounts_are_not_partially_matched(self):
+        for amount in ['1,00.00', '1234,567.89', '25.000', '25.00,123', '25.00.00']:
+            with self.subTest(amount=amount):
+                self.assertIsNone(self.scraper._extract_venmo_payment(message(
+                    f'Taylor Example paid you ${amount}', 'dues See transaction',
+                )))
+                self.assertEqual(self.scraper._extract_zelle_payments(message(
+                    'Zelle payment received', f'TAYLOR EXAMPLE sent you ${amount}',
+                )), [])
+
+    def test_html_bodies_at_each_nesting_level(self):
+        html = ('<div><span>TAYLOR</span> <span>EXAMPLE</span></div>'
+                '<div>sent you $25.00</div><div>Memo: <b>retreat</b></div>'
+                '<div>JORDAN SAMPLE sent you $30.00</div><div>Memo: dues</div>')
+        original = message('Zelle payment received', html)
+        original['payload']['mimeType'] = 'text/html'
+        for depth in range(3):
+            sample = message('Zelle payment received', '')
+            body = original['payload']
+            for _ in range(depth):
+                body = {'mimeType': 'multipart/mixed', 'parts': [body]}
+            sample['payload'].update(body)
+            payments = self.scraper._extract_zelle_payments(sample)
+            self.assertEqual([p['person'] for p in payments], ['TAYLOR EXAMPLE', 'JORDAN SAMPLE'])
+            self.assertEqual([p['note'] for p in payments], ['retreat', 'dues'])
+
+    def test_alternatives_prefer_plain_text_and_skip_attachments(self):
+        plain = message('', 'correct body')['payload']
+        plain['mimeType'] = 'text/plain'
+        html = message('', '<p>HTML body</p>')['payload']
+        html['mimeType'] = 'text/html'
+        attachment = dict(plain, filename='payment.txt')
+        alternative = {'mimeType': 'multipart/alternative', 'parts': [html, plain]}
+        payload = {'mimeType': 'multipart/mixed', 'parts': [attachment, alternative]}
+        self.assertEqual(self.scraper._get_email_body(payload), 'correct body')
+        plain['body']['data'] = ''
+        self.assertEqual(self.scraper._get_email_body(payload).strip(), 'HTML body')
+        self.assertEqual(self.scraper._get_email_body(dict(attachment, filename='', headers=[
+            {'name': 'Content-Disposition', 'value': 'attachment'}
+        ])), '')
+
+    def test_authorization_errors_are_classified_without_raw_details(self):
+        with patch.object(VenmoEmailScraper, 'authenticate', side_effect=RuntimeError('private-token')):
+            with self.assertRaises(ScraperError) as result:
+                scrape_emails('test@example.com', datetime.now(), 'dues')
+            self.assertEqual(result.exception.code, 'authorization_failed')
+            self.assertNotIn('private-token', str(result.exception))
+        for code in ['account_mismatch', 'oauth_setup_required']:
+            with patch.object(VenmoEmailScraper, 'authenticate', side_effect=ScraperError(code)):
+                with self.assertRaises(ScraperError) as result:
+                    scrape_emails('test@example.com', datetime.now(), 'dues')
+                self.assertEqual(result.exception.code, code)
 
     def test_message_pagination(self):
         service = Mock()

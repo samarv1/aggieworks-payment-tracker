@@ -3,6 +3,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 from functools import wraps
 from threading import RLock
@@ -27,6 +28,15 @@ def _amount(value) -> Decimal:
     if not amount.is_finite():
         raise ValueError("Payment amount must be finite")
     return amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+# Spreadsheet readers can interpret formula prefixes after leading whitespace.
+def _csv_text(value: str) -> str:
+    significant = re.sub(r'^[\s\x00-\x1f]+', '', value)
+    if (significant.startswith(('=', '+', '-', '@', '＝', '＋', '－', '＠'))
+            or value.startswith(('\t', '\r', '\n'))):
+        return "'" + value
+    return value
 
 
 def _date_key(value: str) -> float:
@@ -93,11 +103,11 @@ def save_payments_to_csv(payments: List[Dict], category: str,
     ordered = sorted(existing.values(), key=lambda p: _date_key(p['date']), reverse=True)
     total = sum((_amount(p['amount']) for p in ordered), Decimal('0.00'))
     with open(csv_path, 'w', newline='', encoding='utf-8') as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_HEADERS)
+        writer = csv.DictWriter(handle, fieldnames=CSV_HEADERS, quoting=csv.QUOTE_ALL)
         writer.writeheader()
         for payment in ordered:
-            writer.writerow({'Person': payment['person'], 'Date': _format_date(payment['date']),
-                             'Description': payment['note'], 'Amount': f"${_amount(payment['amount']):.2f}"})
+            writer.writerow({'Person': _csv_text(payment['person']), 'Date': _csv_text(_format_date(payment['date'])),
+                             'Description': _csv_text(payment['note']), 'Amount': f"${_amount(payment['amount']):.2f}"})
         writer.writerow({'Person': '', 'Date': '', 'Description': 'TOTAL', 'Amount': f'${total:.2f}'})
     with open(csv_path, 'rb') as handle:
         csv_hash = hashlib.sha256(handle.read()).hexdigest()

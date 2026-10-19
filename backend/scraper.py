@@ -8,6 +8,9 @@ import base64
 from email.utils import parsedate_to_datetime
 import os.path
 import hashlib
+from errors import ScraperError
+
+AMOUNT_PATTERN = r'((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})(?![\d,.])'
 
 # Gmail API scopes
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -32,7 +35,7 @@ class VenmoEmailScraper:
         """Select an account; Gmail access is authorized separately with OAuth."""
         self.email = email.strip().lower()
         if not re.fullmatch(r"[^\s@/\\]+@[^\s@/\\]+\.[^\s@/\\]+", self.email):
-            raise ValueError("Enter a valid Gmail account email address")
+            raise ScraperError('invalid_email')
         self.service = None
 
     def authenticate(self):
@@ -58,10 +61,7 @@ class VenmoEmailScraper:
                 creds.refresh(Request())
             else:
                 if not os.path.exists(credentials_file):
-                    raise RuntimeError(
-                        "OAuth2 credentials file not found. "
-                        "Please set up Gmail API credentials from Google Cloud Console"
-                    )
+                    raise ScraperError('oauth_setup_required')
                 flow = InstalledAppFlow.from_client_secrets_file(credentials_file, SCOPES)
                 creds = flow.run_local_server(
                     port=0, login_hint=self.email, prompt='select_account'
@@ -70,10 +70,7 @@ class VenmoEmailScraper:
         service = build('gmail', 'v1', credentials=creds)
         profile = service.users().getProfile(userId='me').execute()
         if profile.get('emailAddress', '').lower() != self.email:
-            raise ValueError(
-                "The authorized Google account does not match the selected email. "
-                "Choose the matching account and try again."
-            )
+            raise ScraperError('account_mismatch')
         with open(token_file, 'w', encoding='utf-8', opener=lambda path, flags: os.open(path, flags, 0o600)) as token:
             token.write(creds.to_json())
         self.service = service
@@ -166,17 +163,17 @@ class VenmoEmailScraper:
 
             # Extract payment info from subject
             # Pattern 1: "You paid [Name] $[Amount]" (outgoing)
-            outgoing_match = re.search(r'You paid (.+?) \$(\d+\.\d{2})', subject)
+            outgoing_match = re.search(r'You paid (.+?) \$' + AMOUNT_PATTERN, subject)
             # Pattern 2: "[Name] paid you $[Amount]" (incoming)
-            incoming_match = re.search(r'(.+?) paid you \$(\d+\.\d{2})', subject)
+            incoming_match = re.search(r'(.+?) paid you \$' + AMOUNT_PATTERN, subject)
 
             if outgoing_match:
                 person = outgoing_match.group(1)
-                amount = float(outgoing_match.group(2))
+                amount = float(outgoing_match.group(2).replace(',', ''))
                 payment_type = "outgoing"
             elif incoming_match:
                 person = incoming_match.group(1)
-                amount = float(incoming_match.group(2))
+                amount = float(incoming_match.group(2).replace(',', ''))
                 payment_type = "incoming"
             else:
                 # Not a payment email we recognize
@@ -228,17 +225,17 @@ class VenmoEmailScraper:
             # Zelle payment patterns in Wells Fargo emails
             # Pattern: "NAME sent you $X.XX"
             # Match only the name (capital letters and spaces), not leading whitespace
-            incoming_pattern = r'([A-Z][A-Z\s]+?)\s+sent you \$(\d+\.\d{2})'
+            incoming_pattern = r'([A-Z][A-Z \t]+?)\s+sent you \$' + AMOUNT_PATTERN
 
-            matches = re.finditer(incoming_pattern, body)
+            matches = list(re.finditer(incoming_pattern, body))
 
             for payment_index, match in enumerate(matches):
                 # Clean up the person's name - remove extra whitespace
                 person = ' '.join(match.group(1).strip().split())
-                amount = float(match.group(2))
+                amount = float(match.group(2).replace(',', ''))
 
-                # Try to find memo/note nearby (after the match)
-                note = self._extract_zelle_note(body, match.end())
+                end = matches[payment_index + 1].start() if payment_index + 1 < len(matches) else len(body)
+                note = self._extract_zelle_note(body[match.end():end])
 
                 payments.append({
                     'message_id': message.get('id'),
@@ -258,17 +255,14 @@ class VenmoEmailScraper:
 
         return payments
 
-    def _extract_zelle_note(self, body: str, match_position: int) -> Optional[str]:
+    def _extract_zelle_note(self, snippet: str) -> Optional[str]:
         """
         Extract the memo/note from Zelle payment in body text
         """
-        # Look for "Memo:" within 500 characters after the match
-        snippet = body[match_position:match_position + 500]
-
         patterns = [
-            r'Memo:\s*([^\n\r]+)',
-            r'Message:\s*([^\n\r]+)',
-            r'Note:\s*([^\n\r]+)',
+            r'Memo:[ \t]*([^\n\r]*)',
+            r'Message:[ \t]*([^\n\r]*)',
+            r'Note:[ \t]*([^\n\r]*)',
         ]
 
         for pattern in patterns:
@@ -280,45 +274,39 @@ class VenmoEmailScraper:
 
     def _get_email_body(self, payload: Dict) -> str:
         """Extract email body from message payload"""
-        body_text = ''
+        disposition = self._get_header(payload.get('headers', []), 'Content-Disposition')
+        if payload.get('filename') or disposition.lower().startswith('attachment'):
+            return ''
+        mime_type = payload.get('mimeType', 'text/plain').lower()
+        parts = payload.get('parts', [])
+        if parts:
+            if mime_type == 'multipart/alternative':
+                parts = sorted(parts, key=lambda part: part.get('mimeType') != 'text/plain')
+                for part in parts:
+                    text = self._get_email_body(part)
+                    if text.strip():
+                        return text
+                return ''
+            return '\n'.join(filter(None, (self._get_email_body(part) for part in parts)))
 
-        # Direct body
-        if 'body' in payload and 'data' in payload['body'] and payload['body']['data']:
-            try:
-                body_text = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
-                return body_text
-            except Exception:
-                pass
-
-        # Check parts for multipart messages
-        if 'parts' in payload:
-            for part in payload['parts']:
-                mime_type = part.get('mimeType', '')
-
-                # Recursively check nested parts
-                if 'parts' in part:
-                    nested_body = self._get_email_body(part)
-                    if nested_body:
-                        return nested_body
-
-                # Check body data
-                if 'body' in part and 'data' in part['body'] and part['body']['data']:
-                    try:
-                        if mime_type == 'text/html':
-                            from bs4 import BeautifulSoup
-                            html = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
-                            soup = BeautifulSoup(html, 'html.parser')
-                            body_text = soup.get_text()
-                            if body_text.strip():
-                                return body_text
-                        elif mime_type == 'text/plain':
-                            body_text = base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
-                            if body_text.strip():
-                                return body_text
-                    except Exception:
-                        pass
-
-        return body_text
+        data = payload.get('body', {}).get('data')
+        if not data or mime_type not in ('text/plain', 'text/html'):
+            return ''
+        try:
+            text = base64.urlsafe_b64decode(data + '=' * (-len(data) % 4)).decode('utf-8')
+        except (ValueError, UnicodeDecodeError):
+            return ''
+        if mime_type == 'text/html':
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(text, 'html.parser')
+            for element in soup(['script', 'style', 'head']):
+                element.decompose()
+            for element in soup.find_all(['br', 'div', 'p', 'tr', 'li']):
+                element.insert_before('\n')
+                element.insert_after('\n')
+            text = soup.get_text(separator=' ')
+            text = '\n'.join(' '.join(line.split()) for line in text.splitlines())
+        return text
 
     def _extract_transaction_id(self, body: str) -> Optional[str]:
         """Extract transaction ID from email body"""
@@ -332,36 +320,22 @@ class VenmoEmailScraper:
         Extract the payment note/description from email body
         This is where users add what the payment is for
         """
-        # Clean up whitespace for better matching
         body_clean = ' '.join(body.split())
-
-        # Venmo emails may contain the note in different formats
-        # Look for common patterns (in order of most specific to least specific)
-        patterns = [
-            # Pattern: Any text before "See transaction" (no word limit)
-            r'([\w\s\-]+?)\s*See transaction',
-            # Pattern: Between dollar amount and other text
-            r'\$[\d,]+\.\d{2}\s+([\w\s\-]+?)\s+(?:Money credited|See transaction)',
-            # Pattern: After "For" keyword
-            r'For\s+(.+?)(?:\n|\.|$)',
-            # Pattern: After "Note:" keyword
-            r'Note:\s+(.+?)(?:\n|\.|$)',
-            # Pattern: "What's it for?" question
-            r'What\'s it for\?\s+(.+?)(?:\n|\.|$)',
-            # Pattern: Look for text between paid you and See transaction
-            r'paid you\s+\$[\d,]+\.\d{2}\s+([\w\s\-]+?)\s+(?:See|Money)',
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, body_clean, re.IGNORECASE)
-            if match:
-                note = match.group(1).strip()
-                # Clean up the note
-                note = re.sub(r'\s+', ' ', note)  # Normalize whitespace
-                note = note.strip()
-                if note and len(note) > 0:
-                    return note
-
+        transaction = re.search(
+            r'\$' + AMOUNT_PATTERN + r'\s*(.*?)\s*(?:Money credited|See transaction|$)',
+            body_clean, re.IGNORECASE,
+        )
+        if transaction:
+            return transaction.group(2).strip() or None
+        labeled = re.search(
+            r"(?:^|\n)[ \t]*(?:For\b|Note:|What's it for\?)[ \t]*(.*?)(?=\n|See transaction|Money credited|$)",
+            body, re.IGNORECASE,
+        )
+        if labeled:
+            return labeled.group(1).strip() or None
+        fallback = re.search(r'^(.*?)\s*See transaction', body_clean, re.IGNORECASE)
+        if fallback:
+            return fallback.group(1).strip() or None
         return None
 
     def _get_header(self, headers: List[Dict], name: str) -> str:
@@ -393,8 +367,8 @@ class VenmoEmailScraper:
 
         if category == 'other' and custom_keywords:
             # Split custom keywords by comma
-            keywords = [kw.strip().lower() for kw in custom_keywords.split(',')]
-            return any(keyword in search_text for keyword in keywords)
+            keywords = [kw.strip().lower() for kw in custom_keywords.split(',') if kw.strip()]
+            return not keywords or any(keyword in search_text for keyword in keywords)
 
         elif category in CATEGORY_KEYWORDS:
             # Check if any preset keyword matches
@@ -421,7 +395,12 @@ def scrape_emails(email: str, start_datetime: datetime,
         List of payment dictionaries
     """
     scraper = VenmoEmailScraper(email)
-    scraper.authenticate()
+    try:
+        scraper.authenticate()
+    except ScraperError:
+        raise
+    except Exception as exc:
+        raise ScraperError('authorization_failed') from exc
     payments = scraper.search_payment_emails(start_datetime, category, keywords, source)
     return payments
 

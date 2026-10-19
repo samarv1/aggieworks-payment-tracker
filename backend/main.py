@@ -1,14 +1,22 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, Literal
 from datetime import datetime
 from threading import Lock
 from scraper import scrape_emails
 from csv_handler import save_payments_to_csv, get_payment_count
+from errors import ScraperError, error_detail
 
 app = FastAPI(title="AggieWorks Payment Tracker API")
 _scrape_lock = Lock()
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request_handler(request, exc):
+    return JSONResponse(status_code=422, content={'detail': error_detail('invalid_request')})
 
 # CORS middleware to allow frontend to call backend
 app.add_middleware(
@@ -56,7 +64,7 @@ def run_scraper(config: ScraperConfig):
         ScraperResponse with status and results
     """
     if not _scrape_lock.acquire(blocking=False):
-        raise HTTPException(status_code=409, detail="A payment search is already running.")
+        raise HTTPException(status_code=409, detail=error_detail('search_running'))
     try:
         # Log the selected search parameters
         print(f"Received scraper request:")
@@ -77,7 +85,7 @@ def run_scraper(config: ScraperConfig):
         except ValueError:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid date/time format"
+                detail=error_detail('invalid_datetime')
             )
 
         # Call scraper function(s) based on source
@@ -142,11 +150,14 @@ def run_scraper(config: ScraperConfig):
 
     except HTTPException:
         raise
+    except ScraperError as exc:
+        status = 400 if exc.code in ('invalid_email', 'account_mismatch') else 503
+        raise HTTPException(status_code=status, detail=error_detail(exc.code)) from exc
     except Exception as e:
         print(f"Error: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing scraper request: {str(e)}"
+            detail=error_detail('search_failed')
         )
 
     finally:

@@ -2,6 +2,7 @@ import csv
 import os
 import sys
 import tempfile
+import json
 import unittest
 from unittest.mock import patch
 
@@ -88,6 +89,29 @@ class CsvTests(unittest.TestCase):
             handle.write('\n')
         self.save([self.payment('new')])
         self.assertEqual(csv_handler.get_payment_count(), 1)
+
+    def test_formula_prefixes_are_escaped_only_in_export(self):
+        values = ['=1+1', '+1+1', '-1+1', '@SUM(A1)', '  =1+1', '\t=1+1',
+                  '\r=1+1', '\n=1+1', '\x00=1+1', '\u00a0=1+1', '\u2003\x00 =1+1', '＝1+1',
+                  '＋1+1', '－1+1', '＠SUM(A1)', '=1+1,"quoted"\nnext line']
+        for value in values:
+            with self.subTest(value=value):
+                payment = self.payment(person=value, note=value, date=value)
+                self.save([payment])
+                self.save([payment])
+                row = self.rows()[0]
+                for column in ['Person', 'Description', 'Date']:
+                    self.assertEqual(row[column], "'" + value)
+                self.assertEqual(self.rows()[-1]['Amount'], '$0.10')
+                with open(os.path.join(self.temp.name, 'csv_metadata.txt')) as handle:
+                    stored = next(iter(json.load(handle)['payments'].values()))
+                self.assertEqual(stored['note'], value)
+
+    def test_ordinary_text_and_csv_delimiters_round_trip(self):
+        note = 'Dues, "fall"\nThanks!'
+        self.save([self.payment(person='Taylor Example', note=note)])
+        self.assertEqual(self.rows()[0]['Person'], 'Taylor Example')
+        self.assertEqual(self.rows()[0]['Description'], note)
 
 
 if __name__ == '__main__':

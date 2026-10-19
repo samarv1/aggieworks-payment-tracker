@@ -33,6 +33,11 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # =============================================================================
 # NODE.JS / FRONTEND
@@ -49,12 +54,12 @@ node_modules/
 !.yarn/versions
 
 # Testing
-/coverage
+coverage/
 
 # Next.js
 .next/
-/out/
-/build
+out/
+build/
 
 # Debug logs
 npm-debug.log*
@@ -74,9 +79,15 @@ next-env.d.ts
 # =============================================================================
 
 # Gmail OAuth2 Credentials - NEVER COMMIT THESE
-backend/credentials.json
+credentials.json
+credentials.json.*
+client_secret*.json
 backend/tokens/
+backend/token*.json
+backend/token*.pickle
 
 # CSV Data Files
-backend/member_to_DoF_payments.csv
-backend/csv_metadata.txt
+backend/*.csv
+backend/csv_metadata.txt*
+/exports/
+/backend/exports/
