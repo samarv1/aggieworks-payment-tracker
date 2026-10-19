@@ -100,6 +100,57 @@ class PaymentParserTests(unittest.TestCase):
         self.assertEqual([p['person'] for p in payments], ['TAYLOR EXAMPLE', 'JORDAN SAMPLE'])
         self.assertEqual([p['note'] for p in payments], ['RETREAT', 'DUES'])
 
+    def test_payment_amounts_accept_sentence_punctuation(self):
+        for suffix in ['.', ', thanks', '. Thank you', '!']:
+            with self.subTest(suffix=suffix):
+                incoming = self.scraper._extract_venmo_payment(message(
+                    f'Taylor Example paid you $25.00{suffix}', 'dues See transaction',
+                ))
+                outgoing = self.scraper._extract_venmo_payment(message(
+                    f'You paid Taylor Example $25.00{suffix}', 'dues See transaction',
+                ))
+                zelle = self.scraper._extract_zelle_payments(message(
+                    'Zelle payment received', f'TAYLOR EXAMPLE sent you $25.00{suffix}\nMemo: dues',
+                ))
+                self.assertIsNotNone(incoming)
+                self.assertIsNotNone(outgoing)
+                self.assertEqual(incoming['amount'], 25.0)
+                self.assertEqual(outgoing['amount'], 25.0)
+                self.assertEqual(len(zelle), 1)
+                self.assertEqual(zelle[0]['amount'], 25.0)
+
+    def test_wrapped_zelle_names_do_not_absorb_previous_memo(self):
+        for mime_type, body in [
+            ('text/plain', 'TAYLOR\nEXAMPLE sent you $25.00\nMemo: RETREAT\n'
+             'JORDAN\nSAMPLE sent you $30.00\nMemo: DUES'),
+            ('text/plain', 'TAYLOR\r\nEXAMPLE sent you $25.00\r\nMemo:\r\nRETREAT\r\n'
+             'JORDAN\r\nSAMPLE sent you $30.00\r\nMemo: DUES'),
+            ('text/html', '<div>TAYLOR<br>EXAMPLE sent you $25.00</div><div>Memo: RETREAT</div>'
+             '<div>JORDAN<br>SAMPLE sent you $30.00</div><div>Memo: DUES</div>'),
+        ]:
+            with self.subTest(mime_type=mime_type, body=body):
+                sample = message('Zelle payment received', body)
+                sample['payload']['mimeType'] = mime_type
+                payments = self.scraper._extract_zelle_payments(sample)
+                self.assertEqual([p['person'] for p in payments], ['TAYLOR EXAMPLE', 'JORDAN SAMPLE'])
+                self.assertEqual([p['note'] for p in payments], ['RETREAT', 'DUES'])
+                self.assertEqual([p['payment_index'] for p in payments], [0, 1])
+
+    def test_next_line_zelle_memos_survive_category_filtering(self):
+        for mime_type, body in [
+            ('text/plain', 'TAYLOR EXAMPLE sent you $25.00\nMemo:\ndues'),
+            ('text/plain', 'TAYLOR EXAMPLE sent you $25.00\r\nMessage:\r\ndues'),
+            ('text/html', '<div>TAYLOR EXAMPLE sent you $25.00</div><div>Note:</div><div>dues</div>'),
+        ]:
+            with self.subTest(mime_type=mime_type):
+                sample = message('Zelle payment received', body)
+                sample['payload']['mimeType'] = mime_type
+                self.scraper.service = Mock()
+                self.scraper._get_messages = Mock(return_value=[sample])
+                payments = self.scraper.search_payment_emails(datetime(2026, 10, 19), 'dues', source='zelle')
+                self.assertEqual(len(payments), 1)
+                self.assertEqual(payments[0]['note'], 'dues')
+
     def test_venmo_notes_preserve_punctuation_and_exclude_amount(self):
         for note in ['Fall retreat', "Dinner, snacks & Sam’s ticket! 🎉", '']:
             with self.subTest(note=note):

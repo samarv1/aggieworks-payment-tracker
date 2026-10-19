@@ -10,7 +10,7 @@ import os.path
 import hashlib
 from errors import ScraperError
 
-AMOUNT_PATTERN = r'((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})(?![\d,.])'
+AMOUNT_PATTERN = r'((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})(?!\d|[,.]\d)'
 
 # Gmail API scopes
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -222,12 +222,12 @@ class VenmoEmailScraper:
             # Get email body
             body = self._get_email_body(message['payload'])
 
-            # Zelle payment patterns in Wells Fargo emails
-            # Pattern: "NAME sent you $X.XX"
-            # Match only the name (capital letters and spaces), not leading whitespace
-            incoming_pattern = r'([A-Z][A-Z \t]+?)\s+sent you \$' + AMOUNT_PATTERN
-
-            matches = list(re.finditer(incoming_pattern, body))
+            incoming_pattern = r'([A-Z][A-Z\s]+?)\s+sent you \$' + AMOUNT_PATTERN
+            # Memo values can be uppercase, just like wrapped sender names.
+            memo_pattern = (r'(?i:Memo|Message|Note):\s*'
+                            r'(?![A-Z][A-Z \t]+?\s+sent you \$)[^\r\n]*')
+            matches = [match for match in re.finditer(memo_pattern + '|' + incoming_pattern, body)
+                       if match.group(1) is not None]
 
             for payment_index, match in enumerate(matches):
                 # Clean up the person's name - remove extra whitespace
@@ -260,9 +260,9 @@ class VenmoEmailScraper:
         Extract the memo/note from Zelle payment in body text
         """
         patterns = [
-            r'Memo:[ \t]*([^\n\r]*)',
-            r'Message:[ \t]*([^\n\r]*)',
-            r'Note:[ \t]*([^\n\r]*)',
+            r'Memo:\s*([^\n\r]*)',
+            r'Message:\s*([^\n\r]*)',
+            r'Note:\s*([^\n\r]*)',
         ]
 
         for pattern in patterns:
