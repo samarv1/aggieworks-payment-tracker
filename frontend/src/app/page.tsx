@@ -17,7 +17,6 @@ import { format } from "date-fns";
 export default function Home() {
   const router = useRouter();
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [startDate, setStartDate] = useState<Date>();
   const [startTime, setStartTime] = useState("00:00");
   const [category, setCategory] = useState("retreat");
@@ -25,37 +24,36 @@ export default function Home() {
   const [venmoSelected, setVenmoSelected] = useState(true);
   const [zelleSelected, setZelleSelected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [isCheckingAccount, setIsCheckingAccount] = useState(true);
 
-  // Check for saved credentials on mount
+  // Restore the selected local account, not an authenticated session.
   useEffect(() => {
     const savedEmail = localStorage.getItem("gmail_email");
-    const savedPassword = localStorage.getItem("gmail_password");
+    localStorage.removeItem("gmail_password");
 
-    if (!savedEmail || !savedPassword) {
-      // Redirect to login if not logged in
+    if (!savedEmail) {
+      // Choose an account before running the scraper.
       router.push("/login");
     } else {
-      // Load saved credentials
+      // OAuth authorization happens in the local backend.
       setEmail(savedEmail);
-      setPassword(savedPassword);
-      setIsCheckingAuth(false);
+      setIsCheckingAccount(false);
     }
   }, [router]);
 
-  const handleLogout = () => {
+  const handleChangeAccount = () => {
     localStorage.removeItem("gmail_email");
     localStorage.removeItem("gmail_password");
     router.push("/login");
   };
 
-  // Show nothing while checking auth
-  if (isCheckingAuth) {
+  // Show nothing while restoring the selected account.
+  if (isCheckingAccount) {
     return null;
   }
 
   const handleRun = async () => {
-    if (!email || !password || !startDate) {
+    if (!email || !startDate) {
       alert("Please fill in all required fields");
       return;
     }
@@ -77,8 +75,7 @@ export default function Home() {
 
     const data = {
       email,
-      password,
-      startDate: startDate.toISOString().split('T')[0], // Format as YYYY-MM-DD
+      startDate: format(startDate, "yyyy-MM-dd"), // Format as YYYY-MM-DD
       startTime,
       category,
       customKeywords: category === "other" ? customKeywords : null,
@@ -99,8 +96,7 @@ export default function Home() {
       }
 
       const result = await response.json();
-      console.log("Scraper response:", result);
-      
+
       let sourceLabel = "";
       if (venmoSelected && zelleSelected) {
         sourceLabel = "Venmo & Zelle";
@@ -109,10 +105,10 @@ export default function Home() {
       } else {
         sourceLabel = "Zelle";
       }
-      
-      const message = `Found ${result.data.new_count} new ${sourceLabel} payment(s)\n` +
+
+      const message = `Matched ${result.data.new_count} ${sourceLabel} payment(s)\n` +
         `Total Amount: $${result.data.total_amount.toFixed(2)}`;
-      
+
       alert(message);
     } catch (error) {
       console.error("Error calling scraper:", error);
@@ -130,13 +126,15 @@ export default function Home() {
             <div>
               <CardTitle>AggieWorks Member Payment Tracker</CardTitle>
               <CardDescription>
-                Logged in as: {email}
+                Selected account: {email}
               </CardDescription>
             </div>
             <Button
               variant="outline"
               size="sm"
-              onClick={handleLogout}
+              onClick={handleChangeAccount}
+              aria-label="Change account"
+              title="Change account"
               className="cursor-pointer"
             >
               <LogOut className="h-4 w-4" />
@@ -245,9 +243,9 @@ export default function Home() {
           </div>
 
           {/* Run Button */}
-          <Button 
-            onClick={handleRun} 
-            className="w-full cursor-pointer" 
+          <Button
+            onClick={handleRun}
+            className="w-full cursor-pointer"
             size="lg"
             disabled={isLoading}
           >

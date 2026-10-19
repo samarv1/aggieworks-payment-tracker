@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,20 +9,16 @@ import { Button } from "@/components/ui/button";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const router = useRouter();
 
-  const handleLogin = () => {
-    if (!email || !password) {
-      alert("Please enter both email and password");
-      return;
-    }
+  useEffect(() => {
+    // Remove credentials saved by older versions of the app.
+    localStorage.removeItem("gmail_password");
+  }, []);
 
-    // Store credentials in localStorage
-    localStorage.setItem("gmail_email", email);
-    localStorage.setItem("gmail_password", password);
-
-    // Redirect to main scraper page
+  const handleSelectAccount = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    localStorage.setItem("gmail_email", email.trim().toLowerCase());
     router.push("/");
   };
 
@@ -32,39 +28,31 @@ export default function LoginPage() {
         <CardHeader>
           <CardTitle>AggieWorks Payment Tracker</CardTitle>
           <CardDescription>
-            Sign in with your Gmail account
+            Choose the Gmail account to search. When you first run the scraper,
+            Google will open to authorize read-only email access.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="email">Email Address</Label>
-            <Input
-              id="email"
-              type="email"
-              placeholder="your.email@gmail.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Email Password</Label>
-            <Input
-              id="password"
-              type="password"
-              placeholder="Enter your email password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-            />
-          </div>
-          <Button 
-            onClick={handleLogin} 
-            className="w-full cursor-pointer" 
-            size="lg"
-          >
-            Sign In
-          </Button>
+        <CardContent>
+          <form onSubmit={handleSelectAccount} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">Email Address</Label>
+              <Input
+                id="email"
+                type="email"
+                placeholder="your.email@gmail.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+            </div>
+            <Button
+              type="submit"
+              className="w-full cursor-pointer"
+              size="lg"
+            >
+              Continue
+            </Button>
+          </form>
         </CardContent>
       </Card>
     </div>
