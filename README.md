@@ -1,12 +1,12 @@
-# AggieWorks Finance Tracker
+# AggieWorks Payment Tracker
 
-Turn incoming Venmo and Zelle payment emails into a spreadsheet of member payments. Used by the AggieWorks Director of Finance and other board members to track incoming payments.
+Turn Venmo and Zelle payment emails into a spreadsheet of member payments.
 
 ## The problem
 
-At AggieWorks, the Director of Finance manually tracked incoming Zelle and Venmo payments and tagged each payment with what it covered, such as dues or a retreat. Recording payments and assigning them to the right collection was repetitive work.
+At AggieWorks, the Director of Finance manually tracked incoming payments and tagged what each covered, such as dues or a retreat. This was repetitive work.
 
-I built this as President of AggieWorks to automate payment tracking for our Director of Finance, using Gmail notifications instead of a direct Venmo or banking integration.
+While President of AggieWorks, I built this tool to automate that process using Gmail notifications.
 
 ## How it works
 
